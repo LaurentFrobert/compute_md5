@@ -1,3 +1,14 @@
+--[[
+	select md5,count(*) from files group by md5 having count(*) > 1
+
+	select * from files where md5=='0722da1b8fb3667a02eb8cfcc690aed0'
+]]
+
+local bundle = require('luvi').bundle
+loadstring(bundle.readfile("luvit-loader.lua"), "bundle:luvit-loader.lua")()
+
+local sql = require "sqlite3"
+
 local uv = require("uv")
 local openssl    = require'openssl' -- ssl inclus avec luvi
 
@@ -18,12 +29,16 @@ function dirtree(dir)
 	end
     for entry,ftype in iter do      -- ftype is nil on unix, but ok on windows
         entry=dir.."/"..entry
-		if not ftype then -- use fs_stat for unix
-			local stat, err, code = uv.fs_stat(entry)
+        local size = 0
+        
+		local stat, err, code = uv.fs_stat(entry)
+		if not ftype then	
 			ftype = stat.type
-		end
+		end	
+		size = stat.size
+		
 				
-		coroutine.yield(entry,ftype)
+		coroutine.yield(entry,ftype,size)
 		if ftype == "directory" then
 		  yieldtree(entry)
 		end      
@@ -53,27 +68,68 @@ function compute_checksum(filename)
 	return bb
 end
 
-function initOrLoadDB(file)
-	-- todo : if file is not found : create it on create table
-	-- if exists : open it
-	return nil
+function initDb(file)
+	local conn = sql.open(file)	
+	conn:exec[[
+	CREATE TABLE files( fullpath TEXT PRIMARY KEY,md5 TEXT, filesize INTEGER);	
+	]]
+
+	return conn
 end
+
+
+
+
+function isFileInDb(conn,stmt,file) 
+	local x= stmt:reset():bind(file):step()	
+	return (x~=nil)
+end
+
+function insertInDb(conn,insert_stmt,filename,md5,size)
+	insert_stmt:reset():bind(filename,md5,size):step()		
+end
+
+function initOrLoadDB(file)		
+	-- check if db file exists
+	local stat, err, code = uv.fs_stat(file)
+	if stat and stat.type ~= 'file' then -- no, it's a directory : bad !
+		error(" db file : "..file.."exists but it is not a file")
+	end 
+	
+	local conn
+	if not stat then
+		conn = initDb(file)		
+	else
+		conn = sql.open(file)	
+	end
+	
+	
+	local select_stmt = conn:prepare("select 1 from  files where fullpath == ?")
+	local insert_stmt = conn:prepare("insert into files values (?,?,?)")
+	
+	return conn,select_stmt,insert_stmt
+end
+
+
+
 
 if args[1] == nil or args[2] == nil then
 	print("usage : ",args[0],"repertoire fichier_db")
 	print("ou bien avec luvi : ./luvi-regular-xxx appli -- repertoire fichier_db")
 else
-	local db = nil	
-	db = initOrLoadDB(args[2])
+	local conn,select_stmt,insert_stmt = initOrLoadDB(args[2])
 	
  -- todo : test if args[1] is a directory or file : if simple file then don't call dirtree but compute_checksum only
  -- here we assume args[1] is a directory
-	for filename, ftype in dirtree(args[1]) do
+	for filename, ftype,size in dirtree(args[1]) do
 		-- print(ftype, filename)
 		if ftype == 'file' then
 			-- todo : if file in db don't compute md5, pass it
-			local md5 = compute_checksum(filename)
-			print(md5,filename)
+			if not isFileInDb(conn,select_stmt,filename)	then			
+				local md5 = compute_checksum(filename)
+				print(md5,filename,size)
+				insertInDb(conn,insert_stmt,filename,md5,size)
+			end
 			-- todo : insert in db
 		end	
 		
