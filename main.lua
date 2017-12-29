@@ -3,6 +3,10 @@
 
 	select * from files where md5=='0722da1b8fb3667a02eb8cfcc690aed0'
 ]]
+--[[
+ todo : faire une interface Web pour gérer les doublons, l'état du systèmes et lancer le service de calcul MD5
+ creationix/weblit via https://github.com/creationix/weblit
+]]
 
 local bundle = require('luvi').bundle
 loadstring(bundle.readfile("luvit-loader.lua"), "bundle:luvit-loader.lua")()
@@ -11,7 +15,7 @@ local sql = require "sqlite3"
 
 local uv = require("uv")
 local openssl    = require'openssl' -- ssl inclus avec luvi
-
+local io = require("io")
 
 function dirtree(dir)
   assert(dir and dir ~= "", "directory parameter is missing or empty")
@@ -125,9 +129,13 @@ else
 		-- print(ftype, filename)
 		if ftype == 'file' then
 			-- todo : if file in db don't compute md5, pass it
-			if not isFileInDb(conn,select_stmt,filename)	then			
+			if not isFileInDb(conn,select_stmt,filename)	then
+			    io.write(string.format("process %s, size : %f MB", filename,size/1024/1024) )
+			    io.flush()
 				local md5 = compute_checksum(filename)
-				print(md5,filename,size)
+				io.write(string.format(" md5 is  %s", md5) )
+				-- print(md5,filename,size)
+				io.write("\n")
 				insertInDb(conn,insert_stmt,filename,md5,size)
 			end
 			-- todo : insert in db
